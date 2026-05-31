@@ -1,0 +1,1 @@
+"""Picture Colorizer application package."""
