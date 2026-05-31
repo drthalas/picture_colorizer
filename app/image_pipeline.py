@@ -39,16 +39,17 @@ _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
         "soft_ink": (65, 54, 78),
         "handwriting_ink": (38, 31, 96),
         "stamp_ink": (62, 66, 92),
-        "ink_start": 0.50,
-        "ink_width": 0.28,
-        "ink_threshold": 62,
-        "ink_area": 14,
-        "soft_start": 0.14,
-        "soft_width": 0.60,
-        "soft_strength": 0.52,
-        "paper_smooth": 3.6,
-        "texture": 0.9,
-        "grain": 0.16,
+        "ink_start": 0.48,
+        "ink_width": 0.30,
+        "ink_threshold": 56,
+        "ink_area": 10,
+        "soft_start": 0.12,
+        "soft_width": 0.62,
+        "soft_strength": 0.62,
+        "paper_smooth": 8.0,
+        "texture": 0.06,
+        "grain": 0.01,
+        "background_smooth": 0.9,
         "vignette": 0.08,
     },
     "strong_1940s": {
@@ -192,7 +193,7 @@ def _ink_masks(normalized: np.ndarray, settings: dict[str, object]) -> tuple[np.
         aspect = width / max(height, 1)
         fill = area / max(width * height, 1)
         touches_edge = x <= 2 or y <= 2 or x + width >= image_width - 2 or y + height >= image_height - 2
-        is_table_line = (aspect > 8.0 and height <= 24) or (aspect > 5.0 and height <= 16) or (
+        is_table_line = (aspect > 8.0 and height <= 16) or (aspect > 5.0 and height <= 12) or (
             aspect < 0.24 and width <= 22
         )
         is_header_print = y < image_height * 0.18 and area < 420 and height <= 42
@@ -287,6 +288,7 @@ def colorize_document(
         sigmaX=float(settings["paper_smooth"]),
         sigmaY=float(settings["paper_smooth"]),
     )
+    paper_luminance = cv2.bilateralFilter(paper_luminance, d=0, sigmaColor=18, sigmaSpace=18)
     paper_normalized = paper_luminance.astype(np.float32) / 255.0
     warm = _paper_gradient(paper_normalized, settings)
 
@@ -311,6 +313,10 @@ def colorize_document(
     result_rgb += paper_texture[..., None] * float(settings["texture"])
     fine_texture = enhanced.astype(np.float32) - cv2.GaussianBlur(enhanced, (0, 0), sigmaX=2.2).astype(np.float32)
     result_rgb += fine_texture[..., None] * float(settings["grain"])
+    background_mask = 1.0 - np.clip(ink_mask * 1.45 + soft_ink_mask * 0.8, 0.0, 1.0)
+    smoothed_rgb = cv2.GaussianBlur(result_rgb, (0, 0), sigmaX=1.9, sigmaY=1.9)
+    smooth_weight = background_mask * float(settings.get("background_smooth", 0.0))
+    result_rgb = result_rgb * (1.0 - smooth_weight) + smoothed_rgb * smooth_weight
     result_rgb = _apply_vignette(result_rgb, float(settings["vignette"]))
 
     result_rgb = np.clip(result_rgb, 0, 255).astype(np.uint8)
