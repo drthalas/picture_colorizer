@@ -3,6 +3,7 @@ from contextlib import redirect_stderr
 from io import StringIO
 from unittest import TestCase
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from app.cli import build_parser
@@ -58,3 +59,31 @@ class ModeTests(TestCase):
 
                 self.assertTrue(output_path.exists())
                 self.assertGreater(output_path.stat().st_size, 0)
+
+    def test_vintage_keeps_noisy_document_readable(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        rng = np.random.default_rng(1943)
+        paper = np.full((220, 320), 178, dtype=np.int16)
+        noisy_paper = np.clip(paper + rng.normal(0, 28, paper.shape), 0, 255).astype(np.uint8)
+        image = Image.fromarray(noisy_paper).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        draw.text((24, 24), "ARCHIVE NOTE", fill="black")
+        draw.line((24, 78, 296, 78), fill="black", width=2)
+        draw.text((24, 100), "Text must stay readable", fill="black")
+
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "noisy.png"
+            output_path = temp_path / "vintage.jpg"
+            image.save(input_path)
+
+            colorize_document(input_path, output_path, mode="vintage")
+
+            result = np.asarray(Image.open(output_path).convert("L"))
+            blank_region = result[130:190, 35:285]
+            text_region = result[18:115, 18:302]
+
+            self.assertGreater(float(blank_region.mean()), 155.0)
+            self.assertLess(float(blank_region.std()), 28.0)
+            self.assertLess(float(text_region.min()), 60.0)
