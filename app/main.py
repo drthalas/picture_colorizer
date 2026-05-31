@@ -8,7 +8,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import BufferedInputFile, Message
 
 from app.config import load_settings
-from app.image_pipeline import colorize_document
+from app.image_pipeline import DEFAULT_MODE, colorize_document
 
 
 dp = Dispatcher()
@@ -45,7 +45,7 @@ async def handle_image(message: Message, bot: Bot) -> None:
         await bot.download_file(file.file_path, destination=input_path)
 
         try:
-            colorize_document(input_path, output_path)
+            colorize_document(input_path, output_path, mode=DEFAULT_MODE)
         except Exception as exc:
             await message.answer(f"Could not process this image: {exc}")
             return
