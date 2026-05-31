@@ -113,3 +113,29 @@ class ModeTests(TestCase):
 
             self.assertLess(float(np.percentile(faint_text_region, 5)), float(paper_region.mean()) - 20.0)
             self.assertLess(float(np.percentile(stamp_region, 20)), float(paper_region.mean()) - 12.0)
+
+    def test_vintage_tints_handwritten_strokes_blue(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        image = Image.new("L", (360, 220), 210)
+        draw = ImageDraw.Draw(image)
+        draw.text((28, 24), "PRINTED HEADER", fill=20)
+        draw.line((28, 62, 330, 62), fill=20, width=2)
+        draw.line((28, 120, 330, 120), fill=20, width=2)
+        draw.line((28, 62, 28, 178), fill=20, width=2)
+        draw.line((330, 62, 330, 178), fill=20, width=2)
+        draw.line((56, 92, 116, 82, 176, 96, 236, 84, 300, 98), fill=35, width=4, joint="curve")
+
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "handwriting.png"
+            output_path = temp_path / "vintage.jpg"
+            image.convert("RGB").save(input_path)
+
+            colorize_document(input_path, output_path, mode="vintage")
+
+            result = np.asarray(Image.open(output_path).convert("RGB"))
+            handwriting_region = result[76:108, 48:310]
+            blue_pixels = handwriting_region[:, :, 2] > handwriting_region[:, :, 0] + 16
+
+            self.assertGreater(float(blue_pixels.mean()), 0.015)

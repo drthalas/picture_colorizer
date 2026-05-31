@@ -17,6 +17,8 @@ _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
         "paper": ((82, 79, 72), (198, 190, 172), (246, 241, 228)),
         "ink": (24, 24, 23),
         "soft_ink": (80, 76, 70),
+        "handwriting_ink": (42, 36, 80),
+        "stamp_ink": (72, 76, 92),
         "ink_start": 0.50,
         "ink_width": 0.28,
         "ink_threshold": 64,
@@ -35,6 +37,8 @@ _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
         "paper": ((69, 56, 36), (190, 166, 105), (242, 229, 180)),
         "ink": (34, 25, 38),
         "soft_ink": (65, 54, 78),
+        "handwriting_ink": (38, 31, 96),
+        "stamp_ink": (62, 66, 92),
         "ink_start": 0.50,
         "ink_width": 0.28,
         "ink_threshold": 62,
@@ -53,6 +57,8 @@ _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
         "paper": ((76, 51, 31), (187, 143, 75), (240, 207, 141)),
         "ink": (28, 20, 18),
         "soft_ink": (76, 54, 58),
+        "handwriting_ink": (38, 30, 88),
+        "stamp_ink": (66, 60, 84),
         "ink_start": 0.46,
         "ink_width": 0.30,
         "ink_threshold": 54,
@@ -71,6 +77,8 @@ _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
         "paper": ((78, 61, 42), (196, 170, 112), (244, 229, 181)),
         "ink": (29, 23, 24),
         "soft_ink": (76, 62, 80),
+        "handwriting_ink": (38, 31, 98),
+        "stamp_ink": (54, 60, 102),
         "ink_start": 0.46,
         "ink_width": 0.30,
         "ink_threshold": 54,
@@ -157,7 +165,7 @@ def _paper_gradient(normalized: np.ndarray, settings: dict[str, object]) -> np.n
     )
 
 
-def _ink_masks(normalized: np.ndarray, settings: dict[str, object]) -> tuple[np.ndarray, np.ndarray]:
+def _ink_masks(normalized: np.ndarray, settings: dict[str, object]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     dark = 1.0 - normalized
     strong = np.clip((dark - float(settings["ink_start"])) / float(settings["ink_width"]), 0.0, 1.0)
     strong_u8 = np.clip(strong * 255.0, 0, 255).astype(np.uint8)
@@ -166,10 +174,52 @@ def _ink_masks(normalized: np.ndarray, settings: dict[str, object]) -> tuple[np.
     binary = strong_u8 > int(settings["ink_threshold"])
     labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
     keep = np.zeros(binary.shape, dtype=np.uint8)
+    handwriting = np.zeros(binary.shape, dtype=np.uint8)
+    stamp = np.zeros(binary.shape, dtype=np.uint8)
     min_area = int(settings["ink_area"])
+    image_height, image_width = binary.shape
     for label in range(1, labels_count):
-        if stats[label, cv2.CC_STAT_AREA] >= min_area:
-            keep[labels == label] = 1
+        x = int(stats[label, cv2.CC_STAT_LEFT])
+        y = int(stats[label, cv2.CC_STAT_TOP])
+        width = int(stats[label, cv2.CC_STAT_WIDTH])
+        height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+
+        keep[labels == label] = 1
+
+        aspect = width / max(height, 1)
+        fill = area / max(width * height, 1)
+        touches_edge = x <= 2 or y <= 2 or x + width >= image_width - 2 or y + height >= image_height - 2
+        is_table_line = (aspect > 8.0 and height <= 24) or (aspect > 5.0 and height <= 16) or (
+            aspect < 0.24 and width <= 22
+        )
+        is_header_print = y < image_height * 0.18 and area < 420 and height <= 42
+        is_small_print = area < 180 and width <= 42 and height <= 34 and fill > 0.12
+        is_signature_zone = y > image_height * 0.68 and width >= 18 and height >= 5
+        is_cursive = (
+            not is_table_line
+            and not is_header_print
+            and not is_small_print
+            and not touches_edge
+            and width >= 12
+            and height >= 5
+            and (area >= 24 or width >= 26 or is_signature_zone)
+        )
+        is_stamp_like = (
+            not is_table_line
+            and not touches_edge
+            and y > image_height * 0.55
+            and width >= 18
+            and height >= 10
+            and fill < 0.42
+        )
+
+        if is_cursive:
+            handwriting[labels == label] = 1
+        if is_stamp_like:
+            stamp[labels == label] = 1
 
     strong_filtered = (strong_u8.astype(np.float32) / 255.0) * keep.astype(np.float32)
     strong_filtered = cv2.GaussianBlur(strong_filtered, (0, 0), sigmaX=0.35, sigmaY=0.35)
@@ -178,7 +228,14 @@ def _ink_masks(normalized: np.ndarray, settings: dict[str, object]) -> tuple[np.
     soft = np.clip((dark - float(settings["soft_start"])) / float(settings["soft_width"]), 0.0, 1.0)
     soft = cv2.GaussianBlur(soft, (0, 0), sigmaX=0.45, sigmaY=0.45)
     soft *= float(settings["soft_strength"]) * (1.0 - strong_filtered)
-    return strong_filtered[..., None], np.clip(soft, 0.0, 1.0)[..., None]
+    handwriting = cv2.GaussianBlur(handwriting.astype(np.float32), (0, 0), sigmaX=0.45, sigmaY=0.45)
+    stamp = cv2.GaussianBlur(stamp.astype(np.float32), (0, 0), sigmaX=0.65, sigmaY=0.65)
+    return (
+        strong_filtered[..., None],
+        np.clip(soft, 0.0, 1.0)[..., None],
+        np.clip(handwriting, 0.0, 1.0)[..., None],
+        np.clip(stamp, 0.0, 1.0)[..., None],
+    )
 
 
 def _stamp_tint(
@@ -233,12 +290,16 @@ def colorize_document(
     paper_normalized = paper_luminance.astype(np.float32) / 255.0
     warm = _paper_gradient(paper_normalized, settings)
 
-    ink_mask, soft_ink_mask = _ink_masks(ink_normalized, settings)
+    ink_mask, soft_ink_mask, handwriting_mask, stamp_mask = _ink_masks(ink_normalized, settings)
     ink = np.array(settings["ink"], dtype=np.float32)
     soft_ink = np.array(settings["soft_ink"], dtype=np.float32)
+    handwriting_ink = np.array(settings["handwriting_ink"], dtype=np.float32)
+    stamp_ink = np.array(settings["stamp_ink"], dtype=np.float32)
+    colored_ink = ink * (1.0 - handwriting_mask) + handwriting_ink * handwriting_mask
+    colored_ink = colored_ink * (1.0 - stamp_mask * 0.45) + stamp_ink * (stamp_mask * 0.45)
 
     result_rgb = warm * (1.0 - soft_ink_mask) + soft_ink * soft_ink_mask
-    result_rgb = result_rgb * (1.0 - ink_mask) + ink * ink_mask
+    result_rgb = result_rgb * (1.0 - ink_mask) + colored_ink * ink_mask
 
     if mode == "stamp_focus":
         red_mask, blue_mask, red_tint, blue_tint = _stamp_tint(source_bgr, ink_normalized)
