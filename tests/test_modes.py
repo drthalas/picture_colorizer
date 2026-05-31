@@ -87,3 +87,29 @@ class ModeTests(TestCase):
             self.assertGreater(float(blank_region.mean()), 155.0)
             self.assertLess(float(blank_region.std()), 28.0)
             self.assertLess(float(text_region.min()), 60.0)
+
+    def test_vintage_preserves_faint_document_marks(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        image = Image.new("L", (320, 220), 205)
+        draw = ImageDraw.Draw(image)
+        draw.text((28, 28), "DARK HEADER", fill=25)
+        draw.text((28, 82), "faint printed text", fill=105)
+        draw.ellipse((34, 132, 120, 206), outline=112, width=4)
+        draw.text((52, 164), "STAMP", fill=112)
+
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "faint.png"
+            output_path = temp_path / "vintage.jpg"
+            image.convert("RGB").save(input_path)
+
+            colorize_document(input_path, output_path, mode="vintage")
+
+            result = np.asarray(Image.open(output_path).convert("L"))
+            paper_region = result[140:200, 190:290]
+            faint_text_region = result[76:108, 24:180]
+            stamp_region = result[128:210, 24:130]
+
+            self.assertLess(float(np.percentile(faint_text_region, 5)), float(paper_region.mean()) - 20.0)
+            self.assertLess(float(np.percentile(stamp_region, 20)), float(paper_region.mean()) - 12.0)

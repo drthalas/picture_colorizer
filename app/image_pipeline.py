@@ -16,52 +16,72 @@ _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
         "denoise": 12,
         "paper": ((82, 79, 72), (198, 190, 172), (246, 241, 228)),
         "ink": (24, 24, 23),
-        "ink_start": 0.42,
-        "ink_width": 0.30,
-        "ink_threshold": 48,
-        "ink_area": 14,
-        "paper_smooth": 6.0,
-        "texture": 0.25,
+        "soft_ink": (80, 76, 70),
+        "ink_start": 0.50,
+        "ink_width": 0.28,
+        "ink_threshold": 64,
+        "ink_area": 16,
+        "soft_start": 0.18,
+        "soft_width": 0.52,
+        "soft_strength": 0.36,
+        "paper_smooth": 4.0,
+        "texture": 0.35,
+        "grain": 0.08,
         "vignette": 0.0,
     },
     "vintage": {
         "clahe": 1.45,
-        "denoise": 13,
-        "paper": ((75, 62, 42), (195, 172, 112), (244, 231, 182)),
-        "ink": (31, 25, 28),
-        "ink_start": 0.44,
-        "ink_width": 0.30,
-        "ink_threshold": 52,
-        "ink_area": 20,
-        "paper_smooth": 6.5,
-        "texture": 0.35,
-        "vignette": 0.04,
+        "denoise": 8,
+        "paper": ((69, 56, 36), (190, 166, 105), (242, 229, 180)),
+        "ink": (34, 25, 38),
+        "soft_ink": (65, 54, 78),
+        "ink_start": 0.50,
+        "ink_width": 0.28,
+        "ink_threshold": 62,
+        "ink_area": 14,
+        "soft_start": 0.14,
+        "soft_width": 0.60,
+        "soft_strength": 0.52,
+        "paper_smooth": 3.6,
+        "texture": 0.9,
+        "grain": 0.16,
+        "vignette": 0.08,
     },
     "strong_1940s": {
         "clahe": 1.55,
-        "denoise": 12,
+        "denoise": 8,
         "paper": ((76, 51, 31), (187, 143, 75), (240, 207, 141)),
         "ink": (28, 20, 18),
-        "ink_start": 0.40,
-        "ink_width": 0.32,
-        "ink_threshold": 44,
+        "soft_ink": (76, 54, 58),
+        "ink_start": 0.46,
+        "ink_width": 0.30,
+        "ink_threshold": 54,
         "ink_area": 14,
-        "paper_smooth": 5.8,
-        "texture": 0.55,
-        "vignette": 0.12,
+        "soft_start": 0.15,
+        "soft_width": 0.58,
+        "soft_strength": 0.48,
+        "paper_smooth": 3.2,
+        "texture": 1.05,
+        "grain": 0.2,
+        "vignette": 0.14,
     },
     "stamp_focus": {
         "clahe": 1.55,
-        "denoise": 12,
+        "denoise": 8,
         "paper": ((78, 61, 42), (196, 170, 112), (244, 229, 181)),
         "ink": (29, 23, 24),
-        "ink_start": 0.39,
-        "ink_width": 0.32,
-        "ink_threshold": 44,
+        "soft_ink": (76, 62, 80),
+        "ink_start": 0.46,
+        "ink_width": 0.30,
+        "ink_threshold": 54,
         "ink_area": 16,
-        "paper_smooth": 5.8,
-        "texture": 0.3,
-        "vignette": 0.04,
+        "soft_start": 0.15,
+        "soft_width": 0.58,
+        "soft_strength": 0.5,
+        "paper_smooth": 3.4,
+        "texture": 0.85,
+        "grain": 0.16,
+        "vignette": 0.08,
     },
 }
 
@@ -137,13 +157,13 @@ def _paper_gradient(normalized: np.ndarray, settings: dict[str, object]) -> np.n
     )
 
 
-def _ink_mask(normalized: np.ndarray, settings: dict[str, object]) -> np.ndarray:
+def _ink_masks(normalized: np.ndarray, settings: dict[str, object]) -> tuple[np.ndarray, np.ndarray]:
     dark = 1.0 - normalized
-    mask = np.clip((dark - float(settings["ink_start"])) / float(settings["ink_width"]), 0.0, 1.0)
-    mask_u8 = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
-    mask_u8 = cv2.medianBlur(mask_u8, 3)
+    strong = np.clip((dark - float(settings["ink_start"])) / float(settings["ink_width"]), 0.0, 1.0)
+    strong_u8 = np.clip(strong * 255.0, 0, 255).astype(np.uint8)
+    strong_u8 = cv2.medianBlur(strong_u8, 3)
 
-    binary = mask_u8 > int(settings["ink_threshold"])
+    binary = strong_u8 > int(settings["ink_threshold"])
     labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
     keep = np.zeros(binary.shape, dtype=np.uint8)
     min_area = int(settings["ink_area"])
@@ -151,9 +171,14 @@ def _ink_mask(normalized: np.ndarray, settings: dict[str, object]) -> np.ndarray
         if stats[label, cv2.CC_STAT_AREA] >= min_area:
             keep[labels == label] = 1
 
-    filtered = (mask_u8.astype(np.float32) / 255.0) * keep.astype(np.float32)
-    filtered = cv2.GaussianBlur(filtered, (0, 0), sigmaX=0.35, sigmaY=0.35)
-    return np.clip(filtered, 0.0, 1.0)[..., None]
+    strong_filtered = (strong_u8.astype(np.float32) / 255.0) * keep.astype(np.float32)
+    strong_filtered = cv2.GaussianBlur(strong_filtered, (0, 0), sigmaX=0.35, sigmaY=0.35)
+    strong_filtered = np.clip(strong_filtered, 0.0, 1.0)
+
+    soft = np.clip((dark - float(settings["soft_start"])) / float(settings["soft_width"]), 0.0, 1.0)
+    soft = cv2.GaussianBlur(soft, (0, 0), sigmaX=0.45, sigmaY=0.45)
+    soft *= float(settings["soft_strength"]) * (1.0 - strong_filtered)
+    return strong_filtered[..., None], np.clip(soft, 0.0, 1.0)[..., None]
 
 
 def _stamp_tint(
@@ -208,10 +233,12 @@ def colorize_document(
     paper_normalized = paper_luminance.astype(np.float32) / 255.0
     warm = _paper_gradient(paper_normalized, settings)
 
-    ink_mask = _ink_mask(ink_normalized, settings)
+    ink_mask, soft_ink_mask = _ink_masks(ink_normalized, settings)
     ink = np.array(settings["ink"], dtype=np.float32)
+    soft_ink = np.array(settings["soft_ink"], dtype=np.float32)
 
-    result_rgb = warm * (1.0 - ink_mask) + ink * ink_mask
+    result_rgb = warm * (1.0 - soft_ink_mask) + soft_ink * soft_ink_mask
+    result_rgb = result_rgb * (1.0 - ink_mask) + ink * ink_mask
 
     if mode == "stamp_focus":
         red_mask, blue_mask, red_tint, blue_tint = _stamp_tint(source_bgr, ink_normalized)
@@ -221,6 +248,8 @@ def colorize_document(
     paper_texture = cv2.GaussianBlur(paper_luminance, (0, 0), sigmaX=10).astype(np.float32)
     paper_texture = (paper_texture - paper_texture.mean()) / (paper_texture.std() + 1e-6)
     result_rgb += paper_texture[..., None] * float(settings["texture"])
+    fine_texture = enhanced.astype(np.float32) - cv2.GaussianBlur(enhanced, (0, 0), sigmaX=2.2).astype(np.float32)
+    result_rgb += fine_texture[..., None] * float(settings["grain"])
     result_rgb = _apply_vignette(result_rgb, float(settings["vignette"]))
 
     result_rgb = np.clip(result_rgb, 0, 255).astype(np.uint8)
