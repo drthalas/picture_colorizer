@@ -6,9 +6,10 @@ from unittest import TestCase
 import numpy as np
 from PIL import Image, ImageDraw
 
+from app.access_control import AccessStore
 from app.cli import build_parser
 from app.image_pipeline import AVAILABLE_MODES, DEFAULT_MODE, colorize_document, validate_mode
-from app.main import build_mode_keyboard
+from app.main import build_access_review_keyboard, build_connect_keyboard, build_mode_keyboard
 from app.pipeline.archive_document_4050 import build_text_mask, preprocess_document, settings_from_env
 
 
@@ -109,6 +110,32 @@ class ModeTests(TestCase):
                 "process:abc123:clean",
             ],
         )
+
+    def test_connect_keyboard_requests_access(self) -> None:
+        keyboard = build_connect_keyboard()
+        button = keyboard.inline_keyboard[0][0]
+
+        self.assertEqual(button.text, "Подключить")
+        self.assertEqual(button.callback_data, "access:request")
+
+    def test_access_review_keyboard_contains_admin_actions(self) -> None:
+        keyboard = build_access_review_keyboard(12345)
+        callback_data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+
+        self.assertEqual(callback_data, ["access:approve:12345", "access:reject:12345"])
+
+    def test_access_store_approves_users_and_always_allows_admin(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            store = AccessStore(Path(temp_dir) / "users.json", admin_user_id=7)
+
+            self.assertTrue(store.is_allowed(7))
+            self.assertFalse(store.is_allowed(42))
+
+            store.approve(42)
+
+            self.assertTrue(store.is_allowed(42))
 
     def test_vintage_keeps_noisy_document_readable(self) -> None:
         from tempfile import TemporaryDirectory

@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import logging
 from pathlib import Path
 from uuid import uuid4
@@ -7,6 +8,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.access_control import AccessStore, TelegramUserInfo
 from app.config import load_settings
 from app.image_pipeline import colorize_document
 
@@ -23,7 +25,20 @@ MODE_DESCRIPTIONS: dict[str, str] = {
     "vintage": "Фото/портрет",
     "clean": "Стандартная обработка",
 }
-PENDING_IMAGES: dict[str, Path] = {}
+
+
+@dataclass(frozen=True)
+class PendingImage:
+    path: Path
+    user_id: int
+
+
+PENDING_IMAGES: dict[str, PendingImage] = {}
+
+
+def get_access_store() -> AccessStore:
+    settings = load_settings()
+    return AccessStore(Path(settings.authorized_users_path), settings.admin_user_id)
 
 
 def build_mode_keyboard(token: str) -> InlineKeyboardMarkup:
@@ -35,8 +50,38 @@ def build_mode_keyboard(token: str) -> InlineKeyboardMarkup:
     )
 
 
+def build_connect_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Подключить", callback_data="access:request")],
+        ]
+    )
+
+
+def build_access_review_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Подтвердить", callback_data=f"access:approve:{user_id}"),
+                InlineKeyboardButton(text="Отклонить", callback_data=f"access:reject:{user_id}"),
+            ],
+        ]
+    )
+
+
+async def answer_connect_prompt(message: Message) -> None:
+    await message.answer(
+        "Бот работает по подтверждению доступа. Нажмите «Подключить», и я отправлю запрос администратору.",
+        reply_markup=build_connect_keyboard(),
+    )
+
+
 @dp.message(CommandStart())
 async def start(message: Message) -> None:
+    if not get_access_store().is_allowed(message.from_user.id if message.from_user else None):
+        await answer_connect_prompt(message)
+        return
+
     await message.answer(
         "Send a black-and-white paper document, note, stamp, letter, or archival fragment. "
         "I will ask you to choose a processing mode before returning the result."
@@ -45,6 +90,11 @@ async def start(message: Message) -> None:
 
 @dp.message(F.photo | F.document)
 async def handle_image(message: Message, bot: Bot) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    if not get_access_store().is_allowed(user_id):
+        await answer_connect_prompt(message)
+        return
+
     settings = load_settings()
     output_dir = Path(settings.output_dir)
     upload_dir = output_dir / "uploads"
@@ -63,7 +113,7 @@ async def handle_image(message: Message, bot: Bot) -> None:
     input_path = upload_dir / f"input-{token}"
     file = await bot.get_file(file_id)
     await bot.download_file(file.file_path, destination=input_path)
-    PENDING_IMAGES[token] = input_path
+    PENDING_IMAGES[token] = PendingImage(path=input_path, user_id=user_id)
 
     await message.answer(
         "Выберите режим обработки:",
@@ -71,9 +121,85 @@ async def handle_image(message: Message, bot: Bot) -> None:
     )
 
 
+@dp.callback_query(F.data == "access:request")
+async def handle_access_request(callback: CallbackQuery, bot: Bot) -> None:
+    settings = load_settings()
+    access_store = AccessStore(Path(settings.authorized_users_path), settings.admin_user_id)
+    user = callback.from_user
+
+    if access_store.is_allowed(user.id):
+        await callback.answer("Доступ уже подключён.", show_alert=True)
+        return
+
+    if settings.admin_user_id is None:
+        await callback.answer("Администратор бота не настроен.", show_alert=True)
+        return
+
+    user_info = TelegramUserInfo(
+        user_id=user.id,
+        full_name=user.full_name,
+        username=user.username,
+    )
+    await bot.send_message(
+        settings.admin_user_id,
+        f"Запрос доступа к боту:\n{user_info.display_name()}",
+        reply_markup=build_access_review_keyboard(user.id),
+    )
+    await callback.answer("Запрос отправлен администратору.", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("access:approve:"))
+@dp.callback_query(F.data.startswith("access:reject:"))
+async def handle_access_review(callback: CallbackQuery, bot: Bot) -> None:
+    if not callback.data:
+        return
+
+    settings = load_settings()
+    access_store = AccessStore(Path(settings.authorized_users_path), settings.admin_user_id)
+
+    if not access_store.is_admin(callback.from_user.id):
+        await callback.answer("Это действие доступно только администратору.", show_alert=True)
+        return
+
+    try:
+        _, action, user_id_raw = callback.data.split(":", 2)
+        user_id = int(user_id_raw)
+    except ValueError:
+        await callback.answer("Не удалось прочитать запрос.", show_alert=True)
+        return
+
+    if action == "approve":
+        access_store.approve(user_id)
+        await callback.answer("Доступ подтверждён.")
+        if callback.message:
+            await callback.message.edit_text(f"Доступ подтверждён для пользователя id: {user_id}")
+        try:
+            await bot.send_message(user_id, "Доступ подтверждён. Теперь можно отправлять фото для обработки.")
+        except Exception:
+            logger.exception("Failed to notify approved user %s", user_id)
+        return
+
+    if action == "reject":
+        await callback.answer("Запрос отклонён.")
+        if callback.message:
+            await callback.message.edit_text(f"Запрос отклонён для пользователя id: {user_id}")
+        try:
+            await bot.send_message(user_id, "Запрос доступа отклонён.")
+        except Exception:
+            logger.exception("Failed to notify rejected user %s", user_id)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+
+
 @dp.callback_query(F.data.startswith("process:"))
 async def handle_mode_choice(callback: CallbackQuery) -> None:
     if not callback.data:
+        return
+
+    user_id = callback.from_user.id
+    if not get_access_store().is_allowed(user_id):
+        await callback.answer("Сначала нужно подключить доступ.", show_alert=True)
         return
 
     try:
@@ -82,10 +208,13 @@ async def handle_mode_choice(callback: CallbackQuery) -> None:
         await callback.answer("Не удалось прочитать выбранный режим.", show_alert=True)
         return
 
-    input_path = PENDING_IMAGES.get(token)
-    if input_path is None or not input_path.exists():
+    pending_image = PENDING_IMAGES.get(token)
+    if pending_image is None or not pending_image.path.exists():
         await callback.message.answer("Исходное изображение не найдено. Отправьте фото ещё раз.")
         await callback.answer()
+        return
+    if pending_image.user_id != user_id:
+        await callback.answer("Это изображение привязано к другому пользователю.", show_alert=True)
         return
 
     settings = load_settings()
@@ -98,7 +227,7 @@ async def handle_mode_choice(callback: CallbackQuery) -> None:
     await callback.message.answer(f"Обрабатываю в режиме: {mode_description}…")
 
     try:
-        await asyncio.to_thread(colorize_document, input_path, output_path, mode)
+        await asyncio.to_thread(colorize_document, pending_image.path, output_path, mode)
     except Exception:
         logger.exception("Image processing failed for mode %s", mode)
         await callback.message.answer(
@@ -115,6 +244,10 @@ async def handle_mode_choice(callback: CallbackQuery) -> None:
 
 @dp.message()
 async def fallback(message: Message) -> None:
+    if not get_access_store().is_allowed(message.from_user.id if message.from_user else None):
+        await answer_connect_prompt(message)
+        return
+
     await message.answer("Send a black-and-white image of a paper document, note, stamp, or archival fragment.")
 
 
@@ -123,6 +256,8 @@ async def main() -> None:
     settings = load_settings()
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is missing. Copy .env.example to .env and fill it in.")
+    if settings.admin_user_id is None:
+        raise RuntimeError("ADMIN_USER_ID is missing. Add your Telegram user id to .env.")
 
     bot = Bot(token=settings.telegram_bot_token)
     await dp.start_polling(bot)

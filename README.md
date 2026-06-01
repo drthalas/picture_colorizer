@@ -25,6 +25,8 @@ Edit `.env` and set:
 
 ```bash
 TELEGRAM_BOT_TOKEN=your_token_here
+ADMIN_USER_ID=your_telegram_user_id
+AUTHORIZED_USERS_PATH=data/authorized_users.json
 DEBUG_IMAGE_PIPELINE=false
 IMAGE_MAX_LONG_SIDE=2800
 ```
@@ -38,9 +40,10 @@ python -m app.main
 
 Then send the bot an image. The bot saves the source image locally and shows mode buttons before processing:
 
-- 📜 Архивный документ 40–50-х
 - 🖼 Фото/портрет
 - ⚙️ Стандартная обработка
+
+Access is controlled by the bot administrator. New users see a `Подключить` button. When they press it, the administrator receives a Telegram request with `Подтвердить` and `Отклонить` buttons. Approved user ids are saved locally in `data/authorized_users.json`.
 
 ## Run Locally Without Telegram
 
