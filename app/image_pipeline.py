@@ -193,20 +193,22 @@ def _ink_masks(normalized: np.ndarray, settings: dict[str, object]) -> tuple[np.
         aspect = width / max(height, 1)
         fill = area / max(width * height, 1)
         touches_edge = x <= 2 or y <= 2 or x + width >= image_width - 2 or y + height >= image_height - 2
-        is_table_line = (aspect > 8.0 and height <= 16) or (aspect > 5.0 and height <= 12) or (
+        is_long_rule = aspect > 4.2 and height <= 13 and fill < 0.22
+        is_table_line = is_long_rule or (aspect > 8.0 and height <= 16) or (aspect > 5.0 and height <= 12) or (
             aspect < 0.24 and width <= 22
         )
         is_header_print = y < image_height * 0.18 and area < 420 and height <= 42
         is_small_print = area < 180 and width <= 42 and height <= 34 and fill > 0.12
-        is_signature_zone = y > image_height * 0.68 and width >= 18 and height >= 5
+        is_signature_zone = y > image_height * 0.68 and width >= 22 and height >= 6 and area >= 42
         is_cursive = (
             not is_table_line
             and not is_header_print
             and not is_small_print
             and not touches_edge
-            and width >= 12
-            and height >= 5
-            and (area >= 24 or width >= 26 or is_signature_zone)
+            and width >= 18
+            and height >= 6
+            and area >= 34
+            and (width >= 30 or is_signature_zone or fill < 0.28)
         )
         is_stamp_like = (
             not is_table_line
