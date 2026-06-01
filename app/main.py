@@ -10,18 +10,23 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 
 from app.access_control import AccessStore, TelegramUserInfo
 from app.config import load_settings
-from app.image_pipeline import colorize_document
+from app.image_pipeline import colorize_document, get_auto_vlm_warning
 
 
 dp = Dispatcher()
 logger = logging.getLogger(__name__)
 
 MODE_BUTTONS: tuple[tuple[str, str], ...] = (
+    ("auto_vlm", "🤖 Авто-анализ локальной моделью"),
     ("vintage", "🖼 Фото/портрет"),
     ("clean", "⚙️ Стандартная обработка"),
 )
 MODE_DESCRIPTIONS: dict[str, str] = {
+    "auto_vlm": "Авто-анализ локальной моделью",
     "archive_document_4050": "Архивный документ 40–50-х",
+    "archive_document": "Архивный документ",
+    "document_readability": "Читаемость документа",
+    "standard": "Стандартная обработка",
     "vintage": "Фото/портрет",
     "clean": "Стандартная обработка",
 }
@@ -228,17 +233,26 @@ async def handle_mode_choice(callback: CallbackQuery) -> None:
 
     try:
         await asyncio.to_thread(colorize_document, pending_image.path, output_path, mode)
-    except Exception:
+    except Exception as exc:
         logger.exception("Image processing failed for mode %s", mode)
+        if mode == "auto_vlm":
+            await callback.message.answer(
+                f"Локальный авто-анализ сейчас недоступен: {exc}. Попробуйте режим стандартной обработки."
+            )
+            return
         await callback.message.answer(
             "Не получилось обработать изображение. Попробуйте другое фото или режим стандартной обработки."
         )
         return
 
     data = output_path.read_bytes()
+    warning = get_auto_vlm_warning(output_path) if mode == "auto_vlm" else None
+    if warning:
+        await callback.message.answer(warning)
+
     await callback.message.answer_photo(
         BufferedInputFile(data, filename=output_path.name),
-        caption=f"Готово: {mode_description}",
+        caption=f"Готово: {mode_description}" if not warning else f"Готово с предупреждением: {mode_description}",
     )
 
 

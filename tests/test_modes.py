@@ -2,15 +2,25 @@ from pathlib import Path
 from contextlib import redirect_stderr
 from io import StringIO
 from unittest import TestCase
+from unittest.mock import patch
+import json
 
 import numpy as np
 from PIL import Image, ImageDraw
 
 from app.access_control import AccessStore
 from app.cli import build_parser
-from app.image_pipeline import AVAILABLE_MODES, DEFAULT_MODE, colorize_document, validate_mode
+from app.image_pipeline import (
+    AVAILABLE_MODES,
+    DEFAULT_MODE,
+    _select_vlm_pipeline_mode,
+    colorize_document,
+    get_auto_vlm_warning,
+    validate_mode,
+)
 from app.main import build_access_review_keyboard, build_connect_keyboard, build_mode_keyboard
 from app.pipeline.archive_document_4050 import build_text_mask, preprocess_document, settings_from_env
+from app.services.local_vlm import LocalVLMClient, parse_json_response
 
 
 class ModeTests(TestCase):
@@ -19,6 +29,9 @@ class ModeTests(TestCase):
 
     def test_archive_document_4050_mode_is_registered(self) -> None:
         self.assertIn("archive_document_4050", AVAILABLE_MODES)
+
+    def test_auto_vlm_mode_is_registered(self) -> None:
+        self.assertIn("auto_vlm", AVAILABLE_MODES)
 
     def test_validate_mode_accepts_all_supported_modes(self) -> None:
         for mode in AVAILABLE_MODES:
@@ -60,6 +73,8 @@ class ModeTests(TestCase):
             image.save(input_path)
 
             for mode in AVAILABLE_MODES:
+                if mode == "auto_vlm":
+                    continue
                 output_path = temp_path / f"{mode}.jpg"
                 colorize_document(input_path, output_path, mode=mode)
 
@@ -106,6 +121,7 @@ class ModeTests(TestCase):
         self.assertEqual(
             callback_data,
             [
+                "process:abc123:auto_vlm",
                 "process:abc123:vintage",
                 "process:abc123:clean",
             ],
@@ -136,6 +152,71 @@ class ModeTests(TestCase):
             store.approve(42)
 
             self.assertTrue(store.is_allowed(42))
+
+    def test_parse_json_response_accepts_plain_json(self) -> None:
+        self.assertEqual(parse_json_response('{"ok": true}'), {"ok": True})
+
+    def test_parse_json_response_accepts_markdown_json_block(self) -> None:
+        response = '```json\n{"readability_changed": "better"}\n```'
+
+        self.assertEqual(parse_json_response(response), {"readability_changed": "better"})
+
+    def test_parse_json_response_rejects_invalid_json(self) -> None:
+        with self.assertRaises(json.JSONDecodeError):
+            parse_json_response("not json")
+
+    def test_local_vlm_is_available_with_mocked_http(self) -> None:
+        class FakeClient(LocalVLMClient):
+            def _request_json(self, path: str, payload: dict | None, timeout_seconds: int) -> dict:
+                return {"models": [{"name": "qwen2.5vl:7b"}]}
+
+        self.assertTrue(FakeClient().is_available())
+
+    def test_non_vlm_pipeline_does_not_call_model_when_disabled(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "input.png"
+            output_path = temp_path / "output.jpg"
+            Image.new("RGB", (80, 60), "white").save(input_path)
+
+            with patch("app.image_pipeline.LocalVLMClient", side_effect=AssertionError("VLM should not be called")):
+                colorize_document(input_path, output_path, mode="standard")
+
+            self.assertTrue(output_path.exists())
+
+    def test_auto_vlm_uses_readability_risk_to_choose_conservative_mode(self) -> None:
+        selected = _select_vlm_pipeline_mode(
+            {
+                "recommended_mode": "archive_document",
+                "readability_risk": "high",
+                "recommended_settings": {"colorization_strength": 0.12},
+            }
+        )
+
+        self.assertEqual(selected, "document_readability")
+
+    def test_auto_vlm_rejection_warning_is_exposed(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "result.jpg"
+            compare_path = Path(temp_dir) / "result.vlm_compare.json"
+            compare_path.write_text(
+                json.dumps(
+                    {
+                        "should_accept_result": False,
+                        "reason": "text became less readable",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            warning = get_auto_vlm_warning(output_path)
+
+            self.assertIsNotNone(warning)
+            self.assertIn("text became less readable", warning or "")
 
     def test_vintage_keeps_noisy_document_readable(self) -> None:
         from tempfile import TemporaryDirectory

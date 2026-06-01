@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 picture-colorize = "app.cli:main"
+picture-vlm-check = "app.vlm_check:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -12,6 +12,12 @@ class Settings:
     authorized_users_path: str = "data/authorized_users.json"
     debug_image_pipeline: bool = False
     image_max_long_side: int = 2800
+    local_vlm_enabled: bool = False
+    local_vlm_provider: str = "ollama"
+    local_vlm_base_url: str = "http://127.0.0.1:11434"
+    local_vlm_model: str = "qwen2.5vl:7b"
+    local_vlm_fallback_model: str = "qwen2.5vl:3b"
+    local_vlm_timeout_seconds: int = 180
 
 
 def _parse_optional_int(value: str | None) -> int | None:
@@ -31,4 +37,10 @@ def load_settings() -> Settings:
         authorized_users_path=os.getenv("AUTHORIZED_USERS_PATH", "data/authorized_users.json"),
         debug_image_pipeline=os.getenv("DEBUG_IMAGE_PIPELINE", "").lower() in {"1", "true", "yes", "on"},
         image_max_long_side=int(os.getenv("IMAGE_MAX_LONG_SIDE", "2800")),
+        local_vlm_enabled=os.getenv("LOCAL_VLM_ENABLED", "").lower() in {"1", "true", "yes", "on"},
+        local_vlm_provider=os.getenv("LOCAL_VLM_PROVIDER", "ollama"),
+        local_vlm_base_url=os.getenv("LOCAL_VLM_BASE_URL", "http://127.0.0.1:11434"),
+        local_vlm_model=os.getenv("LOCAL_VLM_MODEL", "qwen2.5vl:7b"),
+        local_vlm_fallback_model=os.getenv("LOCAL_VLM_FALLBACK_MODEL", "qwen2.5vl:3b"),
+        local_vlm_timeout_seconds=int(os.getenv("LOCAL_VLM_TIMEOUT_SECONDS", "180")),
     )

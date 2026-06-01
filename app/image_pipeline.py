@@ -1,21 +1,45 @@
 from pathlib import Path
+import json
 from typing import Literal, cast
 
 import cv2
 import numpy as np
 from PIL import Image
 
+from app.config import load_settings
 from app.pipeline.archive_document_4050 import process_archive_document_4050
+from app.services.local_vlm import LocalVLMClient
 
-ProcessingMode = Literal["clean", "vintage", "strong_1940s", "stamp_focus", "archive_document_4050"]
+ProcessingMode = Literal[
+    "clean",
+    "vintage",
+    "strong_1940s",
+    "stamp_focus",
+    "archive_document_4050",
+    "archive_document",
+    "document_readability",
+    "standard",
+    "auto_vlm",
+]
 AVAILABLE_MODES: tuple[ProcessingMode, ...] = (
     "clean",
     "vintage",
     "strong_1940s",
     "stamp_focus",
     "archive_document_4050",
+    "archive_document",
+    "document_readability",
+    "standard",
+    "auto_vlm",
 )
 DEFAULT_MODE: ProcessingMode = "vintage"
+
+VLM_RECOMMENDED_MODE_MAP: dict[str, ProcessingMode] = {
+    "document_readability": "document_readability",
+    "archive_document": "archive_document",
+    "photo_color": "vintage",
+    "standard": "standard",
+}
 
 
 _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
@@ -282,8 +306,14 @@ def colorize_document(
 ) -> Path:
     """Enhance a paper document image while preserving existing text and marks."""
     mode = validate_mode(mode)
-    if mode == "archive_document_4050":
+    if mode == "auto_vlm":
+        return process_auto_vlm(input_path, output_path)
+    if mode in {"archive_document_4050", "archive_document"}:
         return process_archive_document_4050(input_path, output_path)
+    if mode == "document_readability":
+        mode = "clean"
+    elif mode == "standard":
+        mode = "clean"
 
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -335,3 +365,96 @@ def colorize_document(
     result_rgb = np.clip(result_rgb, 0, 255).astype(np.uint8)
     Image.fromarray(result_rgb).save(output_path, quality=95)
     return output_path
+
+
+def process_auto_vlm(input_path: str | Path, output_path: str | Path) -> Path:
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    settings = load_settings()
+    if not settings.local_vlm_enabled:
+        raise RuntimeError("LOCAL_VLM_ENABLED=false. Enable it in .env to use auto_vlm.")
+    if settings.local_vlm_provider != "ollama":
+        raise RuntimeError(f"Unsupported LOCAL_VLM_PROVIDER={settings.local_vlm_provider!r}. Expected 'ollama'.")
+
+    client = LocalVLMClient(
+        base_url=settings.local_vlm_base_url,
+        model=settings.local_vlm_model,
+        timeout_seconds=settings.local_vlm_timeout_seconds,
+        fallback_model=settings.local_vlm_fallback_model,
+    )
+    if not client.is_available():
+        raise RuntimeError(
+            f"Local VLM is not available. Start Ollama and pull {settings.local_vlm_model} "
+            f"or {settings.local_vlm_fallback_model}."
+        )
+
+    analysis = client.analyze_image(input_path)
+    _write_json(_sidecar_path(output_path, "vlm_analysis"), analysis)
+
+    selected_mode = _select_vlm_pipeline_mode(analysis)
+    colorize_document(input_path, output_path, mode=selected_mode)
+
+    comparison = client.compare_before_after(input_path, output_path)
+    comparison["selected_pipeline_mode"] = selected_mode
+
+    if comparison.get("should_accept_result") is False and selected_mode != "document_readability":
+        initial_comparison = comparison
+        selected_mode = "document_readability"
+        colorize_document(input_path, output_path, mode=selected_mode)
+        comparison = client.compare_before_after(input_path, output_path)
+        comparison["selected_pipeline_mode"] = selected_mode
+        comparison["fallback_from_pipeline_mode"] = initial_comparison.get("selected_pipeline_mode")
+        comparison["initial_comparison"] = initial_comparison
+
+    if comparison.get("should_accept_result") is False:
+        comparison["warning"] = "VLM marked the processed result as risky for readability."
+
+    _write_json(_sidecar_path(output_path, "vlm_compare"), comparison)
+
+    return output_path
+
+
+def _select_vlm_pipeline_mode(analysis: dict) -> ProcessingMode:
+    recommended = str(analysis.get("recommended_mode", "standard"))
+    selected_mode = VLM_RECOMMENDED_MODE_MAP.get(recommended, "standard")
+    recommended_settings = analysis.get("recommended_settings", {})
+    if not isinstance(recommended_settings, dict):
+        recommended_settings = {}
+
+    try:
+        colorization_strength = float(recommended_settings.get("colorization_strength", 0.25))
+    except (TypeError, ValueError):
+        colorization_strength = 0.25
+
+    readability_risk = str(analysis.get("readability_risk", "medium")).lower()
+    if selected_mode in {"archive_document", "vintage"} and (
+        readability_risk == "high" or colorization_strength < 0.18
+    ):
+        return "document_readability"
+    return selected_mode
+
+
+def get_auto_vlm_warning(output_path: str | Path) -> str | None:
+    compare_path = _sidecar_path(Path(output_path), "vlm_compare")
+    if not compare_path.exists():
+        return None
+
+    try:
+        data = json.loads(compare_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if data.get("should_accept_result") is False:
+        reason = data.get("reason") or data.get("warning") or "модель отметила риск ухудшения читаемости"
+        return f"Внимание: локальная модель считает результат рискованным для читаемости. Причина: {reason}"
+    return None
+
+
+def _sidecar_path(output_path: Path, suffix: str) -> Path:
+    return output_path.with_name(f"{output_path.stem}.{suffix}.json")
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

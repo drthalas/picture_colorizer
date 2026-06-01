@@ -29,6 +29,12 @@ ADMIN_USER_ID=your_telegram_user_id
 AUTHORIZED_USERS_PATH=data/authorized_users.json
 DEBUG_IMAGE_PIPELINE=false
 IMAGE_MAX_LONG_SIDE=2800
+LOCAL_VLM_ENABLED=false
+LOCAL_VLM_PROVIDER=ollama
+LOCAL_VLM_BASE_URL=http://127.0.0.1:11434
+LOCAL_VLM_MODEL=qwen2.5vl:7b
+LOCAL_VLM_FALLBACK_MODEL=qwen2.5vl:3b
+LOCAL_VLM_TIMEOUT_SECONDS=180
 ```
 
 ## Run the Telegram Bot
@@ -40,6 +46,7 @@ python -m app.main
 
 Then send the bot an image. The bot saves the source image locally and shows mode buttons before processing:
 
+- 🤖 Авто-анализ локальной моделью
 - 🖼 Фото/портрет
 - ⚙️ Стандартная обработка
 
@@ -65,6 +72,9 @@ python -m app.cli path/to/input.jpg data/output/colorized.jpg --mode vintage
 - `strong_1940s` applies a stronger 1940s-style look with warmer paper, more visible sepia, and a light vignette while keeping text readable.
 - `stamp_focus` gently emphasizes existing red-brown or blue stamp-like areas when they are already present. It does not invent stamps or redraw missing marks.
 - `archive_document_4050` is optimized for old documents, award sheets, certificates, letters, and pages with handwritten or printed text. It builds a readability layer, text/line/stamp mask, controlled vintage color layer, then blends text back over the color so readability stays first.
+- `archive_document` is a short alias for `archive_document_4050`.
+- `document_readability` and `standard` are conservative readability aliases for the current clean pipeline.
+- `auto_vlm` uses local Qwen2.5-VL through Ollama to analyze the image, select a local OpenCV/Pillow pipeline, then compare before/after for readability risk. The model does not edit pixels directly.
 
 Examples:
 
@@ -74,7 +84,51 @@ python -m app.cli input.jpg output.jpg --mode clean
 python -m app.cli input.jpg output.jpg --mode strong_1940s
 python -m app.cli input.jpg output.jpg --mode stamp_focus
 python -m app.cli input.jpg output.jpg --mode archive_document_4050
+python -m app.cli input.jpg output.jpg --mode archive_document
+python -m app.cli input.jpg output.jpg --mode document_readability
+python -m app.cli input.jpg output.jpg --mode standard
+python -m app.cli input.jpg output.jpg --mode auto_vlm
 ```
+
+## Local Qwen2.5-VL Analysis
+
+The optional local VLM mode uses Qwen2.5-VL as a visual analysis and control layer. It classifies the input as document/photo/portrait/mixed, detects text/table/stamp/handwriting risk, recommends conservative processing settings, and checks whether the processed result preserved readability. Pixel editing still happens in the local OpenCV/Pillow pipelines.
+
+Install and start Ollama:
+
+```bash
+brew install ollama
+brew services start ollama
+ollama pull qwen2.5vl:7b
+ollama pull qwen2.5vl:3b
+```
+
+Enable the mode in `.env`:
+
+```bash
+LOCAL_VLM_ENABLED=true
+LOCAL_VLM_PROVIDER=ollama
+LOCAL_VLM_BASE_URL=http://127.0.0.1:11434
+LOCAL_VLM_MODEL=qwen2.5vl:7b
+LOCAL_VLM_FALLBACK_MODEL=qwen2.5vl:3b
+LOCAL_VLM_TIMEOUT_SECONDS=180
+```
+
+Diagnostic check:
+
+```bash
+python -m app.vlm_check input.jpg
+```
+
+For `auto_vlm`, analysis and comparison JSON files are saved next to the output image as `*.vlm_analysis.json` and `*.vlm_compare.json`. If Qwen2.5-VL reports that readability became worse, the bot sends a warning instead of silently presenting the result as clean.
+
+Troubleshooting:
+
+- If Ollama is not running, start it with `brew services start ollama` or `ollama serve`.
+- If the model is missing, run `ollama pull qwen2.5vl:7b`; use `qwen2.5vl:3b` as a lighter fallback.
+- If memory is tight or responses are slow, use `LOCAL_VLM_MODEL=qwen2.5vl:3b`.
+- If the model returns invalid JSON, the request fails gracefully and the old non-VLM modes still work.
+- If `LOCAL_VLM_ENABLED=false`, the bot and CLI keep using the existing local pipelines without calling Ollama.
 
 ## Archive Document Pipeline
 
