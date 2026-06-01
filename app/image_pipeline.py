@@ -5,8 +5,16 @@ import cv2
 import numpy as np
 from PIL import Image
 
-ProcessingMode = Literal["clean", "vintage", "strong_1940s", "stamp_focus"]
-AVAILABLE_MODES: tuple[ProcessingMode, ...] = ("clean", "vintage", "strong_1940s", "stamp_focus")
+from app.pipeline.archive_document_4050 import process_archive_document_4050
+
+ProcessingMode = Literal["clean", "vintage", "strong_1940s", "stamp_focus", "archive_document_4050"]
+AVAILABLE_MODES: tuple[ProcessingMode, ...] = (
+    "clean",
+    "vintage",
+    "strong_1940s",
+    "stamp_focus",
+    "archive_document_4050",
+)
 DEFAULT_MODE: ProcessingMode = "vintage"
 
 
@@ -274,6 +282,9 @@ def colorize_document(
 ) -> Path:
     """Enhance a paper document image while preserving existing text and marks."""
     mode = validate_mode(mode)
+    if mode == "archive_document_4050":
+        return process_archive_document_4050(input_path, output_path)
+
     input_path = Path(input_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -25,6 +25,8 @@ Edit `.env` and set:
 
 ```bash
 TELEGRAM_BOT_TOKEN=your_token_here
+DEBUG_IMAGE_PIPELINE=false
+IMAGE_MAX_LONG_SIDE=2800
 ```
 
 ## Run the Telegram Bot
@@ -34,9 +36,11 @@ source .venv/bin/activate
 python -m app.main
 ```
 
-Then send the bot a black-and-white image of a paper document, note, stamp, letter, or archival fragment.
+Then send the bot an image. The bot saves the source image locally and shows mode buttons before processing:
 
-The Telegram bot currently processes images automatically with the default `vintage` mode.
+- 📜 Архивный документ 40–50-х
+- 🖼 Фото/портрет
+- ⚙️ Стандартная обработка
 
 ## Run Locally Without Telegram
 
@@ -57,6 +61,7 @@ python -m app.cli path/to/input.jpg data/output/colorized.jpg --mode vintage
 - `clean` improves readability with stronger contrast, nearly no added color, and only a minimal warm paper tone.
 - `strong_1940s` applies a stronger 1940s-style look with warmer paper, more visible sepia, and a light vignette while keeping text readable.
 - `stamp_focus` gently emphasizes existing red-brown or blue stamp-like areas when they are already present. It does not invent stamps or redraw missing marks.
+- `archive_document_4050` is optimized for old documents, award sheets, certificates, letters, and pages with handwritten or printed text. It builds a readability layer, text/line/stamp mask, controlled vintage color layer, then blends text back over the color so readability stays first.
 
 Examples:
 
@@ -65,7 +70,29 @@ python -m app.cli input.jpg output.jpg --mode vintage
 python -m app.cli input.jpg output.jpg --mode clean
 python -m app.cli input.jpg output.jpg --mode strong_1940s
 python -m app.cli input.jpg output.jpg --mode stamp_focus
+python -m app.cli input.jpg output.jpg --mode archive_document_4050
 ```
+
+## Archive Document Pipeline
+
+`archive_document_4050` is a lightweight OpenCV/Pillow pipeline. It does not install or require DocRes, DDColor, Real-ESRGAN, or other neural backends yet.
+
+The pipeline is structured for later extension:
+
+- document restoration backend placeholder for DocRes-style restoration;
+- colorizer backend placeholder for DDColor-style colorization;
+- deterministic local OpenCV implementation used by default.
+
+Environment variables:
+
+```bash
+DEBUG_IMAGE_PIPELINE=false
+IMAGE_MAX_LONG_SIDE=2800
+```
+
+When `DEBUG_IMAGE_PIPELINE=true`, intermediate masks and layers are saved locally next to the output file. They are not sent to Telegram users.
+
+This mode is optimized for documents, not portraits. If a document looks prettier but text is harder to read, that is a bad result and the pipeline should be tuned for readability.
 
 ## Privacy and Git Hygiene
 

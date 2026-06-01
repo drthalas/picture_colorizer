@@ -8,11 +8,16 @@ from PIL import Image, ImageDraw
 
 from app.cli import build_parser
 from app.image_pipeline import AVAILABLE_MODES, DEFAULT_MODE, colorize_document, validate_mode
+from app.main import build_mode_keyboard
+from app.pipeline.archive_document_4050 import build_text_mask, preprocess_document, settings_from_env
 
 
 class ModeTests(TestCase):
     def test_default_mode_is_vintage(self) -> None:
         self.assertEqual(DEFAULT_MODE, "vintage")
+
+    def test_archive_document_4050_mode_is_registered(self) -> None:
+        self.assertIn("archive_document_4050", AVAILABLE_MODES)
 
     def test_validate_mode_accepts_all_supported_modes(self) -> None:
         for mode in AVAILABLE_MODES:
@@ -59,6 +64,45 @@ class ModeTests(TestCase):
 
                 self.assertTrue(output_path.exists())
                 self.assertGreater(output_path.stat().st_size, 0)
+
+    def test_archive_document_pipeline_preserves_size(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "document.png"
+            output_path = temp_path / "archive.jpg"
+            image = Image.new("RGB", (260, 180), (220, 220, 215))
+            draw = ImageDraw.Draw(image)
+            draw.text((24, 24), "DOCUMENT 1945", fill="black")
+            draw.line((24, 80, 236, 80), fill="black", width=2)
+            draw.text((24, 108), "handwritten note", fill=(35, 35, 35))
+            image.save(input_path)
+
+            colorize_document(input_path, output_path, mode="archive_document_4050")
+
+            with Image.open(output_path) as result:
+                self.assertEqual(result.size, image.size)
+            self.assertGreater(output_path.stat().st_size, 0)
+
+    def test_archive_document_text_mask_shape(self) -> None:
+        image = Image.new("RGB", (240, 160), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((20, 28, 92, 52), fill="black")
+        draw.line((20, 84, 220, 84), fill="black", width=4)
+
+        rgb = np.asarray(image)
+        preprocessed = preprocess_document(rgb, settings_from_env())
+        mask = build_text_mask(preprocessed)
+
+        self.assertEqual(mask.shape, preprocessed.shape)
+        self.assertGreater(int(mask.max()), 0)
+
+    def test_telegram_mode_keyboard_contains_archive_callback(self) -> None:
+        keyboard = build_mode_keyboard("abc123")
+        callback_data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+
+        self.assertIn("process:abc123:archive_document_4050", callback_data)
 
     def test_vintage_keeps_noisy_document_readable(self) -> None:
         from tempfile import TemporaryDirectory
