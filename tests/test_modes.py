@@ -98,11 +98,17 @@ class ModeTests(TestCase):
         self.assertEqual(mask.shape, preprocessed.shape)
         self.assertGreater(int(mask.max()), 0)
 
-    def test_telegram_mode_keyboard_contains_archive_callback(self) -> None:
+    def test_telegram_mode_keyboard_contains_only_public_callbacks(self) -> None:
         keyboard = build_mode_keyboard("abc123")
         callback_data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
-        self.assertIn("process:abc123:archive_document_4050", callback_data)
+        self.assertEqual(
+            callback_data,
+            [
+                "process:abc123:vintage",
+                "process:abc123:clean",
+            ],
+        )
 
     def test_vintage_keeps_noisy_document_readable(self) -> None:
         from tempfile import TemporaryDirectory

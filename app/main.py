@@ -15,7 +15,6 @@ dp = Dispatcher()
 logger = logging.getLogger(__name__)
 
 MODE_BUTTONS: tuple[tuple[str, str], ...] = (
-    ("archive_document_4050", "📜 Архивный документ 40–50-х"),
     ("vintage", "🖼 Фото/портрет"),
     ("clean", "⚙️ Стандартная обработка"),
 )
