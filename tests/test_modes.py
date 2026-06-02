@@ -314,7 +314,8 @@ class ModeTests(TestCase):
             printed_region = result[18:48, 24:180].astype(np.float32)
             handwriting_region = result[76:112, 48:314].astype(np.float32)
 
-            self.assertGreater(float(paper_region[:, :, 0].mean()), float(paper_region[:, :, 2].mean()) + 24.0)
+            self.assertGreater(float(paper_region[:, :, 0].mean()), float(paper_region[:, :, 2].mean()) + 36.0)
+            self.assertGreater(float(paper_region[:, :, 1].mean()), float(paper_region[:, :, 2].mean()) + 22.0)
             printed_blue_pixels = printed_region[:, :, 2] > printed_region[:, :, 0] + 18
             self.assertLess(float(printed_blue_pixels.mean()), 0.01)
             blue_pixels = handwriting_region[:, :, 2] > handwriting_region[:, :, 0] + 18
