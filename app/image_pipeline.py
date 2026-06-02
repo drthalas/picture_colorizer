@@ -410,6 +410,8 @@ def process_auto_vlm(input_path: str | Path, output_path: str | Path) -> Path:
 
     if comparison.get("should_accept_result") is False:
         comparison["warning"] = "VLM marked the processed result as risky for readability."
+        _save_original_as_output(input_path, output_path)
+        comparison["returned_original"] = True
 
     _write_json(_sidecar_path(output_path, "vlm_compare"), comparison)
 
@@ -417,6 +419,9 @@ def process_auto_vlm(input_path: str | Path, output_path: str | Path) -> Path:
 
 
 def _select_vlm_pipeline_mode(analysis: dict) -> ProcessingMode:
+    if _vlm_detects_document_with_text(analysis):
+        return "document_readability"
+
     recommended = str(analysis.get("recommended_mode", "standard"))
     selected_mode = VLM_RECOMMENDED_MODE_MAP.get(recommended, "standard")
     recommended_settings = analysis.get("recommended_settings", {})
@@ -434,6 +439,20 @@ def _select_vlm_pipeline_mode(analysis: dict) -> ProcessingMode:
     ):
         return "document_readability"
     return selected_mode
+
+
+def _vlm_detects_document_with_text(analysis: dict) -> bool:
+    image_type = str(analysis.get("image_type", "unknown")).lower()
+    recommended = str(analysis.get("recommended_mode", "standard")).lower()
+    has_document_marks = any(
+        bool(analysis.get(key))
+        for key in ("has_text", "has_handwriting", "has_table", "has_stamp")
+    )
+    is_document_route = image_type in {"document", "mixed"} or recommended in {
+        "document_readability",
+        "archive_document",
+    }
+    return is_document_route and has_document_marks
 
 
 def get_auto_vlm_warning(output_path: str | Path) -> str | None:
@@ -458,3 +477,9 @@ def _sidecar_path(output_path: Path, suffix: str) -> Path:
 
 def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _save_original_as_output(input_path: Path, output_path: Path) -> None:
+    source = _read_image(input_path)
+    rgb = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
+    Image.fromarray(rgb).save(output_path, quality=95)

@@ -197,6 +197,20 @@ class ModeTests(TestCase):
 
         self.assertEqual(selected, "document_readability")
 
+    def test_auto_vlm_routes_text_documents_to_readability_mode(self) -> None:
+        selected = _select_vlm_pipeline_mode(
+            {
+                "image_type": "document",
+                "has_text": True,
+                "has_stamp": True,
+                "recommended_mode": "archive_document",
+                "readability_risk": "low",
+                "recommended_settings": {"colorization_strength": 0.35},
+            }
+        )
+
+        self.assertEqual(selected, "document_readability")
+
     def test_auto_vlm_rejection_warning_is_exposed(self) -> None:
         from tempfile import TemporaryDirectory
 
