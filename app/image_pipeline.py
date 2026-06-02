@@ -341,44 +341,35 @@ def _paper_wear_texture(paper_luminance: np.ndarray, background_mask: np.ndarray
     return mottle[..., None] * warm_wear * strength * background_mask
 
 
-def _source_blue_text_mask(source_bgr: np.ndarray, text_mask: np.ndarray) -> np.ndarray:
-    text_2d = np.squeeze(text_mask)
-    hsv = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2HSV)
-    hue = hsv[..., 0]
-    saturation = hsv[..., 1]
-    value = hsv[..., 2]
+def _source_text_alpha(source_bgr: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape[:2]
+    background_sigma = max(20.0, min(height, width) / 22.0)
+    background = cv2.GaussianBlur(gray, (0, 0), sigmaX=background_sigma, sigmaY=background_sigma)
+    local_dark = np.clip((background.astype(np.float32) - gray.astype(np.float32) - 5.0) / 42.0, 0.0, 1.0)
+    absolute_dark = np.clip((188.0 - gray.astype(np.float32)) / 82.0, 0.0, 1.0)
+    adaptive = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        35,
+        9,
+    ).astype(np.float32) / 255.0
 
-    blue_seed = (
-        (hue >= 84)
-        & (hue <= 148)
-        & (saturation >= 22)
-        & (value <= 238)
-        & (text_2d >= 0.08)
-    )
-    text_binary = text_2d >= 0.16
-    labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(text_binary.astype(np.uint8), connectivity=8)
-    blue_components = np.zeros(text_2d.shape, dtype=np.uint8)
-    image_height = text_2d.shape[0]
+    alpha = np.maximum(local_dark, absolute_dark * 0.68)
+    alpha = np.maximum(alpha, adaptive * 0.58)
+    alpha_u8 = np.clip(alpha * 255.0, 0, 255).astype(np.uint8)
+    labels_count, labels, stats, _ = cv2.connectedComponentsWithStats((alpha_u8 > 34).astype(np.uint8), connectivity=8)
+    keep = np.zeros(gray.shape, dtype=np.uint8)
     for label in range(1, labels_count):
-        x = int(stats[label, cv2.CC_STAT_LEFT])
-        y = int(stats[label, cv2.CC_STAT_TOP])
-        width = int(stats[label, cv2.CC_STAT_WIDTH])
-        height = int(stats[label, cv2.CC_STAT_HEIGHT])
         area = int(stats[label, cv2.CC_STAT_AREA])
-        if area < 4:
-            continue
-        fill = area / max(width * height, 1)
-        is_solid_print = fill > 0.23 and height >= 7
-        is_large_header = y < image_height * 0.18 and height >= 18 and fill > 0.16
-        if is_solid_print or is_large_header:
-            continue
-        component = labels == label
-        seed_count = int(np.count_nonzero(blue_seed & component))
-        if seed_count >= 2 or seed_count / max(area, 1) >= 0.05:
-            blue_components[component] = 1
+        if area >= 3:
+            keep[labels == label] = 1
 
-    blue_components = cv2.GaussianBlur(blue_components.astype(np.float32), (0, 0), sigmaX=0.25, sigmaY=0.25)
-    return np.clip(blue_components, 0.0, 1.0)[..., None]
+    alpha = alpha * keep.astype(np.float32)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=0.28, sigmaY=0.28)
+    return np.clip(alpha * 1.12, 0.0, 1.0)[..., None]
 
 
 def _document_readability_result(
@@ -388,17 +379,10 @@ def _document_readability_result(
     soft_ink_mask: np.ndarray,
     settings: dict[str, object],
 ) -> np.ndarray:
-    text_alpha = np.clip(ink_mask * 1.08 + soft_ink_mask * 0.08, 0.0, 1.0)
-    blue_mask = _source_blue_text_mask(source_bgr, ink_mask)
-    blue_alpha = np.clip(ink_mask * blue_mask * 1.22, 0.0, 1.0)
-    dark_alpha = np.clip(text_alpha * (1.0 - blue_mask * 0.9), 0.0, 1.0)
-
-    dark_ink = np.array(settings["ink"], dtype=np.float32)
-    blue_ink = np.array(settings["handwriting_ink"], dtype=np.float32)
-
-    result_rgb = warm * (1.0 - dark_alpha) + dark_ink * dark_alpha
-    result_rgb = result_rgb * (1.0 - blue_alpha) + blue_ink * blue_alpha
-    return result_rgb
+    source_rgb = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
+    text_alpha = _source_text_alpha(source_bgr)
+    text_layer = np.clip(source_rgb * 0.92, 0, 255)
+    return warm * (1.0 - text_alpha) + text_layer * text_alpha
 
 
 def colorize_document(
