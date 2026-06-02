@@ -232,6 +232,32 @@ class ModeTests(TestCase):
             self.assertIsNotNone(warning)
             self.assertIn("text became less readable", warning or "")
 
+    def test_document_readability_adds_warm_paper_and_blue_handwriting(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        image = Image.new("L", (360, 240), 214)
+        draw = ImageDraw.Draw(image)
+        draw.text((28, 24), "PRINTED HEADER", fill=18)
+        draw.line((28, 64, 330, 64), fill=24, width=2)
+        draw.line((28, 122, 330, 122), fill=24, width=2)
+        draw.line((54, 94, 112, 82, 178, 96, 238, 84, 304, 100), fill=32, width=4, joint="curve")
+
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "document.png"
+            output_path = temp_path / "readability.jpg"
+            image.convert("RGB").save(input_path)
+
+            colorize_document(input_path, output_path, mode="document_readability")
+
+            result = np.asarray(Image.open(output_path).convert("RGB"))
+            paper_region = result[150:220, 42:320]
+            handwriting_region = result[76:112, 48:314]
+
+            self.assertGreater(float(paper_region[:, :, 0].mean()), float(paper_region[:, :, 2].mean()) + 24.0)
+            blue_pixels = handwriting_region[:, :, 2] > handwriting_region[:, :, 0] + 18
+            self.assertGreater(float(blue_pixels.mean()), 0.02)
+
     def test_vintage_keeps_noisy_document_readable(self) -> None:
         from tempfile import TemporaryDirectory
 

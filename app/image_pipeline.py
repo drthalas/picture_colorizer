@@ -63,6 +63,28 @@ _MODE_SETTINGS: dict[ProcessingMode, dict[str, object]] = {
         "grain": 0.08,
         "vignette": 0.0,
     },
+    "document_readability": {
+        "clahe": 1.68,
+        "denoise": 12,
+        "paper": ((88, 79, 58), (205, 190, 142), (249, 241, 211)),
+        "ink": (20, 20, 21),
+        "soft_ink": (72, 68, 60),
+        "handwriting_ink": (29, 34, 118),
+        "stamp_ink": (62, 66, 98),
+        "ink_start": 0.50,
+        "ink_width": 0.28,
+        "ink_threshold": 64,
+        "ink_area": 16,
+        "soft_start": 0.18,
+        "soft_width": 0.52,
+        "soft_strength": 0.26,
+        "paper_smooth": 4.5,
+        "texture": 0.16,
+        "grain": 0.025,
+        "background_smooth": 0.18,
+        "paper_wear": 1.1,
+        "vignette": 0.015,
+    },
     "vintage": {
         "clahe": 1.45,
         "denoise": 8,
@@ -299,6 +321,19 @@ def _stamp_tint(
     return red_mask, blue_mask, red_tint, blue_tint
 
 
+def _paper_wear_texture(paper_luminance: np.ndarray, background_mask: np.ndarray, strength: float) -> np.ndarray:
+    if strength <= 0.0:
+        return np.zeros((*paper_luminance.shape, 3), dtype=np.float32)
+
+    broad = cv2.GaussianBlur(paper_luminance.astype(np.float32), (0, 0), sigmaX=18, sigmaY=18)
+    base = cv2.GaussianBlur(broad, (0, 0), sigmaX=54, sigmaY=54)
+    mottle = broad - base
+    mottle = (mottle - float(mottle.mean())) / (float(mottle.std()) + 1e-6)
+    mottle = cv2.GaussianBlur(mottle, (0, 0), sigmaX=4.5, sigmaY=4.5)
+    warm_wear = np.array([0.9, 0.45, -0.7], dtype=np.float32)
+    return mottle[..., None] * warm_wear * strength * background_mask
+
+
 def colorize_document(
     input_path: str | Path,
     output_path: str | Path,
@@ -310,9 +345,7 @@ def colorize_document(
         return process_auto_vlm(input_path, output_path)
     if mode in {"archive_document_4050", "archive_document"}:
         return process_archive_document_4050(input_path, output_path)
-    if mode == "document_readability":
-        mode = "clean"
-    elif mode == "standard":
+    if mode == "standard":
         mode = "clean"
 
     input_path = Path(input_path)
@@ -357,6 +390,7 @@ def colorize_document(
     fine_texture = enhanced.astype(np.float32) - cv2.GaussianBlur(enhanced, (0, 0), sigmaX=2.2).astype(np.float32)
     result_rgb += fine_texture[..., None] * float(settings["grain"])
     background_mask = 1.0 - np.clip(ink_mask * 1.45 + soft_ink_mask * 0.8, 0.0, 1.0)
+    result_rgb += _paper_wear_texture(paper_luminance, background_mask, float(settings.get("paper_wear", 0.0)))
     smoothed_rgb = cv2.GaussianBlur(result_rgb, (0, 0), sigmaX=1.9, sigmaY=1.9)
     smooth_weight = background_mask * float(settings.get("background_smooth", 0.0))
     result_rgb = result_rgb * (1.0 - smooth_weight) + smoothed_rgb * smooth_weight
