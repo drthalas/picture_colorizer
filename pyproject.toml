@@ -16,11 +16,19 @@ ocr = [
     "paddleocr>=3,<4",
     "paddlepaddle>=3.3,<4",
 ]
+docres = [
+    "torch>=2.12,<3",
+    "torchvision>=0.27,<1",
+    "scikit-image>=0.26,<1",
+    "einops>=0.8,<1",
+    "tqdm>=4.67,<5",
+]
 
 [project.scripts]
 picture-colorize = "app.cli:main"
 picture-vlm-check = "app.vlm_check:main"
 picture-ocr-check = "app.ocr_check:main"
+picture-docres-check = "app.docres_check:main"
 
 [build-system]
 requires = ["setuptools>=68"]

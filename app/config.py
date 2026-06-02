@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import os
+import sys
 
 from dotenv import load_dotenv
 
@@ -25,6 +26,11 @@ class Settings:
     local_ocr_min_similarity: float = 0.58
     local_ocr_max_text_drop_ratio: float = 0.35
     document_restorer_provider: str = "opencv"
+    docres_repo_dir: str = ".external/DocRes"
+    docres_python: str = ""
+    docres_task: str = "appearance"
+    docres_timeout_seconds: int = 900
+    docres_save_dtsprompt: bool = False
 
 
 def _parse_optional_int(value: str | None) -> int | None:
@@ -57,4 +63,9 @@ def load_settings() -> Settings:
         local_ocr_min_similarity=float(os.getenv("LOCAL_OCR_MIN_SIMILARITY", "0.58")),
         local_ocr_max_text_drop_ratio=float(os.getenv("LOCAL_OCR_MAX_TEXT_DROP_RATIO", "0.35")),
         document_restorer_provider=os.getenv("DOCUMENT_RESTORER_PROVIDER", "opencv"),
+        docres_repo_dir=os.getenv("DOCRES_REPO_DIR", ".external/DocRes"),
+        docres_python=os.getenv("DOCRES_PYTHON") or sys.executable,
+        docres_task=os.getenv("DOCRES_TASK", "appearance"),
+        docres_timeout_seconds=int(os.getenv("DOCRES_TIMEOUT_SECONDS", "900")),
+        docres_save_dtsprompt=os.getenv("DOCRES_SAVE_DTSPROMPT", "").lower() in {"1", "true", "yes", "on"},
     )

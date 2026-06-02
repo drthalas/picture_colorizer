@@ -431,8 +431,24 @@ def process_auto_vlm(input_path: str | Path, output_path: str | Path) -> Path:
             f"or {settings.local_vlm_fallback_model}."
         )
 
-    restorer = create_document_restorer(settings.document_restorer_provider)
-    restored_input_path = restorer.restore(input_path)
+    restorer = create_document_restorer(
+        settings.document_restorer_provider,
+        repo_dir=settings.docres_repo_dir,
+        python_executable=settings.docres_python,
+        task=settings.docres_task,
+        timeout_seconds=settings.docres_timeout_seconds,
+        save_dtsprompt=settings.docres_save_dtsprompt,
+    )
+    restored_input_path = restorer.restore(input_path, _sidecar_image_path(output_path, "docres_restored"))
+    if restored_input_path != input_path:
+        _write_json(
+            _sidecar_path(output_path, "docres_restore"),
+            {
+                "provider": restorer.provider,
+                "task": settings.docres_task,
+                "restored_path": str(restored_input_path),
+            },
+        )
     ocr_reader = _create_ocr_reader(settings)
     ocr_before = _read_ocr_if_enabled(ocr_reader, restored_input_path, output_path, "ocr_before")
 
@@ -586,6 +602,10 @@ def get_auto_vlm_warning(output_path: str | Path) -> str | None:
 
 def _sidecar_path(output_path: Path, suffix: str) -> Path:
     return output_path.with_name(f"{output_path.stem}.{suffix}.json")
+
+
+def _sidecar_image_path(output_path: Path, suffix: str) -> Path:
+    return output_path.with_name(f"{output_path.stem}.{suffix}{output_path.suffix}")
 
 
 def _write_json(path: Path, data: dict) -> None:

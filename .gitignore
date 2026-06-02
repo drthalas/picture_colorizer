@@ -1,5 +1,6 @@
 .env
 .venv/
+.external/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -16,5 +17,6 @@ outputs/
 *.tif
 *.tiff
 *.webp
+*.pkl
 
 !.env.example

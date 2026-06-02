@@ -42,6 +42,11 @@ LOCAL_OCR_MIN_CONFIDENCE=0.35
 LOCAL_OCR_MIN_SIMILARITY=0.58
 LOCAL_OCR_MAX_TEXT_DROP_RATIO=0.35
 DOCUMENT_RESTORER_PROVIDER=opencv
+DOCRES_REPO_DIR=.external/DocRes
+DOCRES_PYTHON=
+DOCRES_TASK=appearance
+DOCRES_TIMEOUT_SECONDS=900
+DOCRES_SAVE_DTSPROMPT=false
 ```
 
 ## Run the Telegram Bot
@@ -185,7 +190,46 @@ The pipeline is structured for later extension:
 - colorizer backend placeholder for DDColor-style colorization;
 - deterministic local OpenCV implementation used by default.
 
-`DOCUMENT_RESTORER_PROVIDER=opencv` currently keeps restoration as a local passthrough backend. `docres` is reserved as the next backend name; setting it before installing a real DocRes adapter will fail clearly rather than silently changing output.
+`DOCUMENT_RESTORER_PROVIDER=opencv` currently keeps restoration as a local passthrough backend. `docres` runs the external official DocRes `inference.py` script through a subprocess and stores the restored intermediate image next to the bot output as `*.docres_restored.jpg`.
+
+DocRes setup:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[docres]"
+mkdir -p .external
+git clone https://github.com/ZZZHANG-jx/DocRes .external/DocRes
+cd .external/DocRes
+mkdir -p data/MBD/checkpoint checkpoints
+```
+
+Then place weights:
+
+- `mbd.pkl` at `.external/DocRes/data/MBD/checkpoint/mbd.pkl`
+- `docres.pkl` at `.external/DocRes/checkpoints/docres.pkl`
+
+The official DocRes README links the required weights and documents inference tasks such as `appearance`, `dewarping`, `deshadowing`, `deblurring`, `binarization`, and `end2end`.
+
+On Apple Silicon, do not use DocRes' original CUDA-pinned `requirements.txt`; use this project's `docres` extra instead. CPU inference can take several minutes per image, so keep `DOCUMENT_RESTORER_PROVIDER=opencv` for the Telegram bot until the diagnostic result and latency are acceptable.
+
+Diagnostic check:
+
+```bash
+python -m app.docres_check input.jpg data/output/docres-restored.jpg --task appearance
+```
+
+Enable only after the diagnostic succeeds:
+
+```bash
+DOCUMENT_RESTORER_PROVIDER=docres
+DOCRES_REPO_DIR=.external/DocRes
+DOCRES_PYTHON=
+DOCRES_TASK=appearance
+DOCRES_TIMEOUT_SECONDS=900
+DOCRES_SAVE_DTSPROMPT=false
+```
+
+If DocRes is enabled but the repo or weights are missing, `auto_vlm` fails clearly instead of silently changing the image.
 
 Environment variables:
 
