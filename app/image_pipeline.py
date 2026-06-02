@@ -8,7 +8,14 @@ from PIL import Image
 
 from app.config import load_settings
 from app.pipeline.archive_document_4050 import process_archive_document_4050
+from app.services.document_restorer import create_document_restorer
 from app.services.local_vlm import LocalVLMClient
+from app.services.ocr import (
+    OCRResult,
+    PaddleOCRTextReader,
+    compare_ocr_results,
+    unavailable_ocr_result,
+)
 
 ProcessingMode = Literal[
     "clean",
@@ -424,32 +431,99 @@ def process_auto_vlm(input_path: str | Path, output_path: str | Path) -> Path:
             f"or {settings.local_vlm_fallback_model}."
         )
 
-    analysis = client.analyze_image(input_path)
+    restorer = create_document_restorer(settings.document_restorer_provider)
+    restored_input_path = restorer.restore(input_path)
+    ocr_reader = _create_ocr_reader(settings)
+    ocr_before = _read_ocr_if_enabled(ocr_reader, restored_input_path, output_path, "ocr_before")
+
+    analysis = client.analyze_image(restored_input_path)
     _write_json(_sidecar_path(output_path, "vlm_analysis"), analysis)
 
     selected_mode = _select_vlm_pipeline_mode(analysis)
-    colorize_document(input_path, output_path, mode=selected_mode)
+    colorize_document(restored_input_path, output_path, mode=selected_mode)
 
-    comparison = client.compare_before_after(input_path, output_path)
+    comparison = client.compare_before_after(restored_input_path, output_path)
     comparison["selected_pipeline_mode"] = selected_mode
+    comparison = _attach_ocr_comparison(settings, ocr_reader, ocr_before, output_path, comparison)
 
-    if comparison.get("should_accept_result") is False and selected_mode != "document_readability":
+    if _result_rejected(comparison) and selected_mode != "document_readability":
         initial_comparison = comparison
         selected_mode = "document_readability"
-        colorize_document(input_path, output_path, mode=selected_mode)
-        comparison = client.compare_before_after(input_path, output_path)
+        colorize_document(restored_input_path, output_path, mode=selected_mode)
+        comparison = client.compare_before_after(restored_input_path, output_path)
         comparison["selected_pipeline_mode"] = selected_mode
         comparison["fallback_from_pipeline_mode"] = initial_comparison.get("selected_pipeline_mode")
         comparison["initial_comparison"] = initial_comparison
+        comparison = _attach_ocr_comparison(settings, ocr_reader, ocr_before, output_path, comparison)
 
-    if comparison.get("should_accept_result") is False:
-        comparison["warning"] = "VLM marked the processed result as risky for readability."
-        _save_original_as_output(input_path, output_path)
+    if _result_rejected(comparison):
+        comparison["warning"] = "Quality control marked the processed result as risky for readability."
+        _save_original_as_output(restored_input_path, output_path)
         comparison["returned_original"] = True
 
     _write_json(_sidecar_path(output_path, "vlm_compare"), comparison)
 
     return output_path
+
+
+def _create_ocr_reader(settings: object) -> PaddleOCRTextReader | None:
+    if not getattr(settings, "local_ocr_enabled", False):
+        return None
+    provider = str(getattr(settings, "local_ocr_provider", "paddleocr")).lower()
+    if provider != "paddleocr":
+        return None
+    return PaddleOCRTextReader(
+        lang=str(getattr(settings, "local_ocr_lang", "ru")),
+        min_confidence=float(getattr(settings, "local_ocr_min_confidence", 0.35)),
+    )
+
+
+def _read_ocr_if_enabled(
+    reader: PaddleOCRTextReader | None,
+    image_path: Path,
+    output_path: Path,
+    suffix: str,
+) -> OCRResult | None:
+    if reader is None:
+        return None
+    try:
+        result = reader.read_text(image_path)
+    except Exception as exc:
+        result = unavailable_ocr_result(reader.provider, image_path, exc)
+    _write_json(_sidecar_path(output_path, suffix), result.to_dict())
+    return result
+
+
+def _attach_ocr_comparison(
+    settings: object,
+    reader: PaddleOCRTextReader | None,
+    ocr_before: OCRResult | None,
+    output_path: Path,
+    comparison: dict,
+) -> dict:
+    if reader is None or ocr_before is None:
+        return comparison
+
+    ocr_after = _read_ocr_if_enabled(reader, output_path, output_path, "ocr_after")
+    if ocr_after is None:
+        return comparison
+
+    ocr_comparison = compare_ocr_results(
+        ocr_before,
+        ocr_after,
+        min_similarity=float(getattr(settings, "local_ocr_min_similarity", 0.58)),
+        max_text_drop_ratio=float(getattr(settings, "local_ocr_max_text_drop_ratio", 0.35)),
+    )
+    _write_json(_sidecar_path(output_path, "ocr_compare"), ocr_comparison)
+    comparison["ocr_comparison"] = ocr_comparison
+    if ocr_comparison.get("should_accept_result") is False:
+        comparison["should_accept_result"] = False
+        comparison["ocr_warning"] = ocr_comparison.get("reason")
+    return comparison
+
+
+def _result_rejected(comparison: dict) -> bool:
+    return comparison.get("should_accept_result") is False
 
 
 def _select_vlm_pipeline_mode(analysis: dict) -> ProcessingMode:
@@ -500,8 +574,13 @@ def get_auto_vlm_warning(output_path: str | Path) -> str | None:
         return None
 
     if data.get("should_accept_result") is False:
-        reason = data.get("reason") or data.get("warning") or "модель отметила риск ухудшения читаемости"
-        return f"Внимание: локальная модель считает результат рискованным для читаемости. Причина: {reason}"
+        reason = (
+            data.get("ocr_warning")
+            or data.get("reason")
+            or data.get("warning")
+            or "контроль качества отметил риск ухудшения читаемости"
+        )
+        return f"Внимание: контроль качества считает результат рискованным для читаемости. Причина: {reason}"
     return None
 
 

@@ -11,9 +11,16 @@ dependencies = [
     "numpy>=1.26,<3",
 ]
 
+[project.optional-dependencies]
+ocr = [
+    "paddleocr>=3,<4",
+    "paddlepaddle>=3.3,<4",
+]
+
 [project.scripts]
 picture-colorize = "app.cli:main"
 picture-vlm-check = "app.vlm_check:main"
+picture-ocr-check = "app.ocr_check:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -35,6 +35,13 @@ LOCAL_VLM_BASE_URL=http://127.0.0.1:11434
 LOCAL_VLM_MODEL=qwen2.5vl:7b
 LOCAL_VLM_FALLBACK_MODEL=qwen2.5vl:3b
 LOCAL_VLM_TIMEOUT_SECONDS=180
+LOCAL_OCR_ENABLED=false
+LOCAL_OCR_PROVIDER=paddleocr
+LOCAL_OCR_LANG=ru
+LOCAL_OCR_MIN_CONFIDENCE=0.35
+LOCAL_OCR_MIN_SIMILARITY=0.58
+LOCAL_OCR_MAX_TEXT_DROP_RATIO=0.35
+DOCUMENT_RESTORER_PROVIDER=opencv
 ```
 
 ## Run the Telegram Bot
@@ -130,6 +137,44 @@ Troubleshooting:
 - If the model returns invalid JSON, the request fails gracefully and the old non-VLM modes still work.
 - If `LOCAL_VLM_ENABLED=false`, the bot and CLI keep using the existing local pipelines without calling Ollama.
 
+## Optional PaddleOCR Text Control
+
+PaddleOCR is optional and disabled by default. When enabled, `auto_vlm` runs OCR before and after processing, saves sidecar JSON files, and rejects a result if recognized text drops too much. This is a control layer only; it does not rewrite letters.
+
+Install the optional package:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[ocr]"
+```
+
+The `ocr` extra installs PaddleOCR and the local PaddlePaddle runtime. The first OCR run can download recognition models into `~/.paddlex`.
+
+Enable OCR control in `.env`:
+
+```bash
+LOCAL_OCR_ENABLED=true
+LOCAL_OCR_PROVIDER=paddleocr
+LOCAL_OCR_LANG=ru
+LOCAL_OCR_MIN_CONFIDENCE=0.35
+LOCAL_OCR_MIN_SIMILARITY=0.58
+LOCAL_OCR_MAX_TEXT_DROP_RATIO=0.35
+```
+
+Diagnostic check:
+
+```bash
+python -m app.ocr_check input.jpg
+```
+
+When enabled, `auto_vlm` writes:
+
+- `*.ocr_before.json`
+- `*.ocr_after.json`
+- `*.ocr_compare.json`
+
+If OCR is unavailable or fails, the bot logs/saves that state and keeps the non-OCR path working. If OCR succeeds and detects likely text loss, the bot returns the original image with a warning instead of silently sending a degraded result.
+
 ## Archive Document Pipeline
 
 `archive_document_4050` is a lightweight OpenCV/Pillow pipeline. It does not install or require DocRes, DDColor, Real-ESRGAN, or other neural backends yet.
@@ -139,6 +184,8 @@ The pipeline is structured for later extension:
 - document restoration backend placeholder for DocRes-style restoration;
 - colorizer backend placeholder for DDColor-style colorization;
 - deterministic local OpenCV implementation used by default.
+
+`DOCUMENT_RESTORER_PROVIDER=opencv` currently keeps restoration as a local passthrough backend. `docres` is reserved as the next backend name; setting it before installing a real DocRes adapter will fail clearly rather than silently changing output.
 
 Environment variables:
 

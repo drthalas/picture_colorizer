@@ -20,7 +20,9 @@ from app.image_pipeline import (
 )
 from app.main import build_access_review_keyboard, build_connect_keyboard, build_mode_keyboard
 from app.pipeline.archive_document_4050 import build_text_mask, preprocess_document, settings_from_env
+from app.services.document_restorer import DocResDocumentRestorer, OpenCVDocumentRestorer, create_document_restorer
 from app.services.local_vlm import LocalVLMClient, parse_json_response
+from app.services.ocr import OCRItem, OCRResult, compare_ocr_results, parse_paddleocr_result
 
 
 class ModeTests(TestCase):
@@ -231,6 +233,63 @@ class ModeTests(TestCase):
 
             self.assertIsNotNone(warning)
             self.assertIn("text became less readable", warning or "")
+
+    def test_auto_vlm_warning_prefers_ocr_reason(self) -> None:
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "result.jpg"
+            compare_path = Path(temp_dir) / "result.vlm_compare.json"
+            compare_path.write_text(
+                json.dumps(
+                    {
+                        "should_accept_result": False,
+                        "reason": "vlm accepted",
+                        "ocr_warning": "OCR detected possible text loss",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            warning = get_auto_vlm_warning(output_path)
+
+            self.assertIsNotNone(warning)
+            self.assertIn("OCR detected possible text loss", warning or "")
+
+    def test_parse_paddleocr_v2_result(self) -> None:
+        raw_result = [
+            [
+                [[[1, 2], [30, 2], [30, 12], [1, 12]], ("Иванов", 0.91)],
+                [[[1, 18], [52, 18], [52, 28], [1, 28]], ("1909", 0.83)],
+            ]
+        ]
+
+        items = parse_paddleocr_result(raw_result)
+
+        self.assertEqual([item.text for item in items], ["Иванов", "1909"])
+        self.assertGreater(items[0].confidence, 0.9)
+
+    def test_compare_ocr_results_rejects_text_loss(self) -> None:
+        before = OCRResult(
+            provider="paddleocr",
+            image_path="before.jpg",
+            available=True,
+            items=[OCRItem(text="Иванов Леонид Яковлевич 1909", confidence=0.9)],
+        )
+        after = OCRResult(
+            provider="paddleocr",
+            image_path="after.jpg",
+            available=True,
+            items=[OCRItem(text="Иванов", confidence=0.9)],
+        )
+
+        comparison = compare_ocr_results(before, after, min_similarity=0.7, max_text_drop_ratio=0.2)
+
+        self.assertFalse(comparison["should_accept_result"])
+
+    def test_document_restorer_factory_keeps_docres_optional(self) -> None:
+        self.assertIsInstance(create_document_restorer("opencv"), OpenCVDocumentRestorer)
+        self.assertIsInstance(create_document_restorer("docres"), DocResDocumentRestorer)
 
     def test_document_readability_adds_warm_paper_and_blue_handwriting(self) -> None:
         from tempfile import TemporaryDirectory
