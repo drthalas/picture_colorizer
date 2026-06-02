@@ -378,6 +378,8 @@ def _handwriting_alpha_from_text(source_bgr: np.ndarray, text_alpha: np.ndarray)
     labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(text_binary.astype(np.uint8), connectivity=8)
     handwriting = np.zeros(alpha_2d.shape, dtype=np.uint8)
     image_height = alpha_2d.shape[0]
+    print_like = np.zeros(alpha_2d.shape, dtype=np.uint8)
+    line_like = np.zeros(alpha_2d.shape, dtype=np.uint8)
 
     for label in range(1, labels_count):
         x = int(stats[label, cv2.CC_STAT_LEFT])
@@ -392,18 +394,28 @@ def _handwriting_alpha_from_text(source_bgr: np.ndarray, text_alpha: np.ndarray)
         fill = area / max(width * height, 1)
         touches_edge = x <= 2 or y <= 2
         is_table_line = (aspect > 7.0 and height <= 13) or (aspect > 12.0 and fill <= 0.18)
-        is_print_like = fill > 0.24 or (width < 22 and height < 28) or (y < image_height * 0.16 and fill > 0.16)
+        is_print_like = fill > 0.34 or (y < image_height * 0.16 and fill > 0.16)
         is_cursive_like = (
             not touches_edge
             and not is_table_line
             and not is_print_like
-            and width >= 22
+            and width >= 14
             and height >= 5
             and 1.25 <= aspect <= 24.0
-            and fill <= 0.23
+            and fill <= 0.34
         )
+        if is_table_line:
+            line_like[labels == label] = 1
+        if is_print_like:
+            print_like[labels == label] = 1
         if is_cursive_like:
             handwriting[labels == label] = 1
+
+    word_kernel = np.ones((3, max(9, alpha_2d.shape[1] // 95)), np.uint8)
+    handwriting_words = cv2.dilate(handwriting, word_kernel, iterations=1)
+    handwriting_words = cv2.erode(handwriting_words, word_kernel, iterations=1)
+    handwriting_words[(print_like > 0) | (line_like > 0)] = 0
+    handwriting = np.maximum(handwriting, handwriting_words)
 
     horizontal_kernel_width = max(24, alpha_2d.shape[1] // 24)
     horizontal_lines = cv2.morphologyEx(
@@ -415,7 +427,7 @@ def _handwriting_alpha_from_text(source_bgr: np.ndarray, text_alpha: np.ndarray)
     handwriting[horizontal_lines > 0] = 0
     handwriting = cv2.dilate(handwriting, np.ones((2, 2), np.uint8), iterations=1)
     handwriting = cv2.GaussianBlur(handwriting.astype(np.float32), (0, 0), sigmaX=0.32, sigmaY=0.32)
-    return np.clip(handwriting * alpha_2d * 1.18, 0.0, 1.0)[..., None]
+    return np.clip(handwriting * alpha_2d * 1.55, 0.0, 1.0)[..., None]
 
 
 def _printed_alpha_from_text(text_alpha: np.ndarray) -> np.ndarray:
@@ -435,7 +447,7 @@ def _printed_alpha_from_text(text_alpha: np.ndarray) -> np.ndarray:
         aspect = width / max(height, 1)
         fill = area / max(width * height, 1)
         is_horizontal_line = aspect > 7.0 and height <= 14
-        is_solid_print = fill > 0.23 and height >= 5
+        is_solid_print = fill > 0.38 and height >= 5
         is_header_print = y < image_height * 0.18 and fill > 0.14
         is_small_print = width < 24 and height < 28 and fill > 0.12
         if is_horizontal_line or is_solid_print or is_header_print or is_small_print:
@@ -464,6 +476,8 @@ def _document_readability_result(
     text_layer = np.clip(source_rgb * 0.92, 0, 255)
     printed_alpha = _printed_alpha_from_text(text_alpha)
     handwriting_alpha = _handwriting_alpha_from_text(source_bgr, text_alpha)
+    residual_handwriting_alpha = np.clip((text_alpha - printed_alpha) * 0.34, 0.0, 0.42)
+    handwriting_alpha = np.clip(np.maximum(handwriting_alpha, residual_handwriting_alpha), 0.0, 1.0)
     dark_ink = np.array(settings["ink"], dtype=np.float32)
     blue_ink = np.array(settings["handwriting_ink"], dtype=np.float32)
     text_layer = text_layer * (1.0 - printed_alpha) + dark_ink * printed_alpha
