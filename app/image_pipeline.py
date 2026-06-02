@@ -341,6 +341,66 @@ def _paper_wear_texture(paper_luminance: np.ndarray, background_mask: np.ndarray
     return mottle[..., None] * warm_wear * strength * background_mask
 
 
+def _source_blue_text_mask(source_bgr: np.ndarray, text_mask: np.ndarray) -> np.ndarray:
+    text_2d = np.squeeze(text_mask)
+    hsv = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2HSV)
+    hue = hsv[..., 0]
+    saturation = hsv[..., 1]
+    value = hsv[..., 2]
+
+    blue_seed = (
+        (hue >= 84)
+        & (hue <= 148)
+        & (saturation >= 22)
+        & (value <= 238)
+        & (text_2d >= 0.08)
+    )
+    text_binary = text_2d >= 0.16
+    labels_count, labels, stats, _ = cv2.connectedComponentsWithStats(text_binary.astype(np.uint8), connectivity=8)
+    blue_components = np.zeros(text_2d.shape, dtype=np.uint8)
+    image_height = text_2d.shape[0]
+    for label in range(1, labels_count):
+        x = int(stats[label, cv2.CC_STAT_LEFT])
+        y = int(stats[label, cv2.CC_STAT_TOP])
+        width = int(stats[label, cv2.CC_STAT_WIDTH])
+        height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < 4:
+            continue
+        fill = area / max(width * height, 1)
+        is_solid_print = fill > 0.23 and height >= 7
+        is_large_header = y < image_height * 0.18 and height >= 18 and fill > 0.16
+        if is_solid_print or is_large_header:
+            continue
+        component = labels == label
+        seed_count = int(np.count_nonzero(blue_seed & component))
+        if seed_count >= 2 or seed_count / max(area, 1) >= 0.05:
+            blue_components[component] = 1
+
+    blue_components = cv2.GaussianBlur(blue_components.astype(np.float32), (0, 0), sigmaX=0.25, sigmaY=0.25)
+    return np.clip(blue_components, 0.0, 1.0)[..., None]
+
+
+def _document_readability_result(
+    source_bgr: np.ndarray,
+    warm: np.ndarray,
+    ink_mask: np.ndarray,
+    soft_ink_mask: np.ndarray,
+    settings: dict[str, object],
+) -> np.ndarray:
+    text_alpha = np.clip(ink_mask * 1.08 + soft_ink_mask * 0.08, 0.0, 1.0)
+    blue_mask = _source_blue_text_mask(source_bgr, ink_mask)
+    blue_alpha = np.clip(ink_mask * blue_mask * 1.22, 0.0, 1.0)
+    dark_alpha = np.clip(text_alpha * (1.0 - blue_mask * 0.9), 0.0, 1.0)
+
+    dark_ink = np.array(settings["ink"], dtype=np.float32)
+    blue_ink = np.array(settings["handwriting_ink"], dtype=np.float32)
+
+    result_rgb = warm * (1.0 - dark_alpha) + dark_ink * dark_alpha
+    result_rgb = result_rgb * (1.0 - blue_alpha) + blue_ink * blue_alpha
+    return result_rgb
+
+
 def colorize_document(
     input_path: str | Path,
     output_path: str | Path,
@@ -380,11 +440,14 @@ def colorize_document(
     soft_ink = np.array(settings["soft_ink"], dtype=np.float32)
     handwriting_ink = np.array(settings["handwriting_ink"], dtype=np.float32)
     stamp_ink = np.array(settings["stamp_ink"], dtype=np.float32)
-    colored_ink = ink * (1.0 - handwriting_mask) + handwriting_ink * handwriting_mask
-    colored_ink = colored_ink * (1.0 - stamp_mask * 0.45) + stamp_ink * (stamp_mask * 0.45)
+    if mode == "document_readability":
+        result_rgb = _document_readability_result(source_bgr, warm, ink_mask, soft_ink_mask, settings)
+    else:
+        colored_ink = ink * (1.0 - handwriting_mask) + handwriting_ink * handwriting_mask
+        colored_ink = colored_ink * (1.0 - stamp_mask * 0.45) + stamp_ink * (stamp_mask * 0.45)
 
-    result_rgb = warm * (1.0 - soft_ink_mask) + soft_ink * soft_ink_mask
-    result_rgb = result_rgb * (1.0 - ink_mask) + colored_ink * ink_mask
+        result_rgb = warm * (1.0 - soft_ink_mask) + soft_ink * soft_ink_mask
+        result_rgb = result_rgb * (1.0 - ink_mask) + colored_ink * ink_mask
 
     if mode == "stamp_focus":
         red_mask, blue_mask, red_tint, blue_tint = _stamp_tint(source_bgr, ink_normalized)
